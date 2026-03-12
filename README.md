@@ -1,6 +1,6 @@
 # make.cs
 
-make.cs is a minimal, file‑based C# build tool for managed projects with native runtime assets. It’s designed for multi‑flavor NuGet packaging (core, RID‑specific, meta) and was originally built to orchestrate the building and packaging of [SDL3#](https://github.com/fruediger/SDL3Sharp) and related projects. The tool is intentionally generic and can be adapted to other .NET projects with similar needs. It is cache‑aware, reproducible, and extensible via MSBuild.
+make.cs is a minimal, file‑based C# build tool for managed projects with native runtime assets. It’s designed for multi‑flavor NuGet packaging (core, RID‑specific, meta) and was originally built to orchestrate the building and packaging of [SDL3#](https://github.com/Sdl3Sharp/SDL3Sharp) and related projects. The tool is intentionally generic and can be adapted to other .NET projects with similar needs. It is cache‑aware, reproducible, and extensible via MSBuild.
 
 ## Requirements
 
