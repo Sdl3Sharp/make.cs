@@ -46,7 +46,8 @@ var apiKeyOption                     = new Option<string>         ("--api-key") 
 var noPackOption                     = new Option<bool?>          ("--no-pack")                        { Description = "Do not 'pack' even if cache is stale." };
 var failStaleOption                  = new Option<bool?>          ("--fail-stale")                     { Description = "Exit with error if cache is stale instead of packing." };
 var docfxOption                      = new Option<FileSystemInfo?>("--docfx")                          { Description = "Path to a docfx.json file or a directory containing one. If a directory is given, the first docfx.json inside it will be used.",             Arity = ArgumentArity.ExactlyOne };
-var docsOutputOption                 = new Option<string?>        ("--docs-output")                    { Description = "Override the documentation output directory. If omitted, the value from docfx.json is used.",                                                Arity = ArgumentArity.ExactlyOne };
+var docsApiOutputOption              = new Option<string?>        ("--docs-api-output")                { Description = "Override the API documentation output directory. This gets passed as the \"--output\" argument to \"docfx metadata\".",                     Arity = ArgumentArity.ExactlyOne };
+var docsOutputOption                 = new Option<string?>        ("--docs-output")                    { Description = "Override the documentation output directory. This gets passed as the \"--output\" argument to \"docfx build\".",                            Arity = ArgumentArity.ExactlyOne };
 var withoutMetadataOption            = new Option<bool?>          ("--without-metadata")               { Description = "Do not include metadata in the generated documentation (e.g. API reference). Doesn't run \"docfx metadata\" before \"docfx build\"." };
 var withoutBuildOption               = new Option<bool?>          ("--without-build")                  { Description = "Do not build the documentation or generate HTML output. Doesn't run \"docfx build\" after \"docfx metadata\"." };
 var buildBeforeDocsOption            = new Option<bool?>          ("--build-before-docs")              { Description = "Build the project before running DocFX (useful for binary-based documentation)." };
@@ -128,13 +129,14 @@ rootCommand.Add(pushCommand);
 // ===== docs command =====
 var docsCommand = new Command("docs", "Build project documentation using DocFX")
 {
-    docfxOption,           docsOutputOption,
-    withoutMetadataOption, withoutBuildOption,
-    buildBeforeDocsOption, requireDocFxMinVersionOption,
-    projectOption,         configOption,
-    defineOption,          noRestoreOption,
-    propertyOption,        verboseOption,
-    noLogoOption,          logoFileOption,
+    docfxOption,                  docsApiOutputOption,
+    docsOutputOption,             withoutMetadataOption,
+    withoutBuildOption,           buildBeforeDocsOption,
+    requireDocFxMinVersionOption, projectOption,
+    configOption,                 defineOption,
+    noRestoreOption,              propertyOption,
+    verboseOption,                noLogoOption,
+    logoFileOption,
     configPathArgument
 };
 docsCommand.SetAction(GlobalSetupAsync(DocsSetupAsync(HandleDocsAsync)));
@@ -143,9 +145,9 @@ rootCommand.Add(docsCommand);
 // ===== docs clean command =====
 var docsCleanCommand = new Command("clean", "Clean documentation output directory")
 {
-    docfxOption,   docsOutputOption,
-    verboseOption, noLogoOption,
-    logoFileOption,
+    docfxOption,      docsApiOutputOption,
+    docsOutputOption, verboseOption,
+    noLogoOption,     logoFileOption,
     configPathArgument
 };
 docsCleanCommand.SetAction(GlobalSetupAsync(DocsSetupAsync(HandleDocsCleanAsync)));
@@ -998,25 +1000,42 @@ async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo project
     }
 }
 
-const string DocsOutputPropertyName = "docsOutput";
+const string DocsOutputPropertyName = "docsOutput", DocsApiOutputPropertyName = "docsApiOutput";
+string? GetDocsApiOutput(Options options) => options.GetString(docsApiOutputOption, DocsApiOutputPropertyName);
 string? GetDocsOutput(Options options) => options.GetString(docsOutputOption, DocsOutputPropertyName);
 
 async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo docsFile, bool noLogo, CancellationToken cancellationToken)
 {
+    var docsApiOutput = GetDocsApiOutput(options);
     var docsOutput = GetDocsOutput(options);
 
-    List<string> dirsToClean  = [];
-    if (!string.IsNullOrWhiteSpace(docsOutput)) { dirsToClean.Add(docsOutput); }
-    else // parse the docfx.json docsFile for "build.output", "build.debugOutput", "build.rawModelOutputFolder", and "build.viewModelOutputFolder"
-    {        
+    List<string> dirsToClean  = [];    
+
+    var docsApiOutputEmpty = string.IsNullOrWhiteSpace(docsApiOutput);
+    if (!docsApiOutputEmpty) { dirsToClean.Add(docsApiOutput!); }
+
+    var docsOutputEmpty = string.IsNullOrWhiteSpace(docsOutput);
+    if (!docsOutputEmpty) { dirsToClean.Add(docsOutput!); }
+
+    // if necessary, parse the docfx.json docsFile for "dest.api", "build.output", "build.debugOutput", "build.rawModelOutputFolder", or "build.viewModelOutputFolder"
+    if (docsApiOutputEmpty || docsOutputEmpty)
+    {
         try
         {
             await using var stream = docsFile.OpenRead();
-            using var jsonDocument = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            using var jsonDocument = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);            
+            var docsFileContainingDir = docsFile.Directory?.FullName ?? string.Empty;
 
-            if (jsonDocument.RootElement.TryGetProperty("build", out var build))
+            if (docsApiOutputEmpty
+                && jsonDocument.RootElement.TryGetProperty("dest", out var dest))
             {
-                var docsFileContainingDir = docsFile.Directory?.FullName ?? string.Empty;
+                if (dest.TryGetProperty("api", out var api) && api.ValueKind is JsonValueKind.String && api.GetString() is var dirToClean && !string.IsNullOrWhiteSpace(dirToClean))
+                { dirsToClean.Add(Path.Combine(docsFileContainingDir, dirToClean)); /* relative path values in a 'docfx.json' are always relative to the 'docfx.json' file */ }
+            }
+
+            if (docsOutputEmpty
+                && jsonDocument.RootElement.TryGetProperty("build", out var build))
+            {
                 foreach (var property in (ReadOnlySpan<string>)[ "output", "debugOutput", "rawModelOutputFolder", "viewModelOutputFolder" ])
                 {
                     if (build.TryGetProperty(property, out var value) && value.ValueKind is JsonValueKind.String && value.GetString() is var dirToClean && !string.IsNullOrWhiteSpace(dirToClean))
@@ -1027,6 +1046,7 @@ async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo do
         catch (JsonException) { return await logger.FailAsync($"The docfx.json file '{docsFile.FullName}' contains invalid JSON.", cancellationToken); }
         catch (IOException e) { return await logger.FailAsync($"Failed to read docfx.json '{docsFile.FullName}': [{e.GetType().Name}]: {e.Message}", cancellationToken); }
     }
+    
 
     if (dirsToClean.Count is not > 0) { return await logger.FailAsync($"No documentation output directories could be resolved. Provide {docsOutputOption.Name}, set '{DocsOutputPropertyName}' in config, or define 'build.output' in docfx.json.", cancellationToken); }
 
@@ -1038,6 +1058,7 @@ async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo do
 
 async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFile, bool noLogo, CancellationToken cancellationToken)
 {
+    var docsApiOutput          = GetDocsApiOutput(options);
     var docsOutput             = GetDocsOutput(options);
     var buildBeforeDocs        = options.GetBoolean(buildBeforeDocsOption, "buildBeforeDocs", false);
     var requireDocFxMinVersion = options.GetString(requireDocFxMinVersionOption, "requireDocfxMinVersion");
@@ -1098,22 +1119,22 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
             """, errorCode: exit, cancellationToken);
     }
 
-    await logger.OutputAsync($"Generating docs for '{docsFile.FullName}'...", cancellationToken);
-
-    (var outputSwitch, docsOutput) = !string.IsNullOrWhiteSpace(docsOutput)
-        ? ("--output", Path.GetFullPath(docsOutput))
-        : (null, null);
+    await logger.OutputAsync($"Generating docs for '{docsFile.FullName}'...", cancellationToken);    
 
     if (!withoutMetadata)
     {
+        (var outputSwitch, docsApiOutput) = !string.IsNullOrWhiteSpace(docsApiOutput)
+            ? ("--output", Path.GetFullPath(docsApiOutput))
+            : (null, null);
+
         await logger.OutputDotnetCliAsync("tool", [ "run", "docfx",
             "metadata", docsFile.FullName,
-            outputSwitch, docsOutput
+            outputSwitch, docsApiOutput
         ], config: null, noRestore: false, noLogo: false, properties: [], cancellationToken);
 
         exit = await RunDotnetAsync("tool", [ "run", "docfx",
             "metadata", docsFile.FullName,
-            outputSwitch, docsOutput
+            outputSwitch, docsApiOutput
         ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
 
         await logger.OutputDotnetFinishedAsync("tool run docfx build", exit, cancellationToken); 
@@ -1123,6 +1144,10 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
 
     if (!withoutBuild)
     {
+        (var outputSwitch, docsOutput) = !string.IsNullOrWhiteSpace(docsOutput)
+            ? ("--output", Path.GetFullPath(docsOutput))
+            : (null, null);
+
         await logger.OutputDotnetCliAsync("tool", [ "run", "docfx",
             "build", docsFile.FullName,
             outputSwitch, docsOutput
