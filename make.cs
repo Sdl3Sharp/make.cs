@@ -1098,16 +1098,16 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
     if (string.IsNullOrWhiteSpace(docsOutput)) { docsOutput = null; }
 
     await logger.OutputDotnetCliAsync("tool", [ "run", "docfx",
-        docsFile.FullName,
+        "build", docsFile.FullName,
         docsOutput is not null ? "--output" : null, docsOutput is not null ? Path.GetFullPath(docsOutput) : null
-    ], config: "Release", noRestore: false, noLogo: false, properties: [], cancellationToken);
+    ], config: null, noRestore: false, noLogo: false, properties: [], cancellationToken);
 
     exit = await RunDotnetAsync("tool", [ "run", "docfx",
-        docsFile.FullName,
+        "build", docsFile.FullName,
         docsOutput is not null ? "--output" : null, docsOutput is not null ? Path.GetFullPath(docsOutput) : null
-    ], config: "Release", noRestore: false, noLogo: false /* "dotnet tool run docfx build" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+    ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
 
-    await logger.OutputDotnetFinishedAsync("tool run docfx", exit, cancellationToken);   
+    await logger.OutputDotnetFinishedAsync("tool run docfx build", exit, cancellationToken);   
 
     return exit;
 }
