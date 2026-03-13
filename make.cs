@@ -47,7 +47,9 @@ var noPackOption                     = new Option<bool?>          ("--no-pack") 
 var failStaleOption                  = new Option<bool?>          ("--fail-stale")                     { Description = "Exit with error if cache is stale instead of packing." };
 var docfxOption                      = new Option<FileSystemInfo?>("--docfx")                          { Description = "Path to a docfx.json file or a directory containing one. If a directory is given, the first docfx.json inside it will be used.",             Arity = ArgumentArity.ExactlyOne };
 var docsOutputOption                 = new Option<string?>        ("--docs-output")                    { Description = "Override the documentation output directory. If omitted, the value from docfx.json is used.",                                                Arity = ArgumentArity.ExactlyOne };
-var buildBeforeDocsOption            = new Option<bool?>          ("--build-before-docs")              { Description = "Build the project before running DocFX (useful for binary-based documentation)."};
+var withoutMetadataOption            = new Option<bool?>          ("--without-metadata")               { Description = "Do not include metadata in the generated documentation (e.g. API reference). Doesn't run \"docfx metadata\" before \"docfx build\"." };
+var withoutBuildOption               = new Option<bool?>          ("--without-build")                  { Description = "Do not build the documentation or generate HTML output. Doesn't run \"docfx build\" after \"docfx metadata\"." };
+var buildBeforeDocsOption            = new Option<bool?>          ("--build-before-docs")              { Description = "Build the project before running DocFX (useful for binary-based documentation)." };
 var requireDocFxMinVersionOption     = new Option<string?>        ("--require-docfx-min-version")      { Description = "Minimum required DocFX version (e.g. 2.75.0). Fails if the installed version is older.",                                                     Arity = ArgumentArity.ExactlyOne };
 
 var configPathArgument = new Argument<FileSystemInfo?>("CONFIG_PATH")
@@ -127,6 +129,7 @@ rootCommand.Add(pushCommand);
 var docsCommand = new Command("docs", "Build project documentation using DocFX")
 {
     docfxOption,           docsOutputOption,
+    withoutMetadataOption, withoutBuildOption,
     buildBeforeDocsOption, requireDocFxMinVersionOption,
     projectOption,         configOption,
     defineOption,          noRestoreOption,
@@ -1038,6 +1041,8 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
     var docsOutput             = GetDocsOutput(options);
     var buildBeforeDocs        = options.GetBoolean(buildBeforeDocsOption, "buildBeforeDocs", false);
     var requireDocFxMinVersion = options.GetString(requireDocFxMinVersionOption, "requireDocfxMinVersion");
+    var withoutMetadata        = options.ParseResult.GetValue(withoutMetadataOption) ?? false;
+    var withoutBuild           = options.ParseResult.GetValue(withoutBuildOption) ?? false;
 
     int exit;
     if (buildBeforeDocs)
@@ -1095,19 +1100,41 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
 
     await logger.OutputAsync($"Generating docs for '{docsFile.FullName}'...", cancellationToken);
 
-    if (string.IsNullOrWhiteSpace(docsOutput)) { docsOutput = null; }
+    (var outputSwitch, docsOutput) = !string.IsNullOrWhiteSpace(docsOutput)
+        ? ("--output", Path.GetFullPath(docsOutput))
+        : (null, null);
 
-    await logger.OutputDotnetCliAsync("tool", [ "run", "docfx",
-        "build", docsFile.FullName,
-        docsOutput is not null ? "--output" : null, docsOutput is not null ? Path.GetFullPath(docsOutput) : null
-    ], config: null, noRestore: false, noLogo: false, properties: [], cancellationToken);
+    if (!withoutMetadata)
+    {
+        await logger.OutputDotnetCliAsync("tool", [ "run", "docfx",
+            "metadata", docsFile.FullName,
+            outputSwitch, docsOutput
+        ], config: null, noRestore: false, noLogo: false, properties: [], cancellationToken);
 
-    exit = await RunDotnetAsync("tool", [ "run", "docfx",
-        "build", docsFile.FullName,
-        docsOutput is not null ? "--output" : null, docsOutput is not null ? Path.GetFullPath(docsOutput) : null
-    ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+        exit = await RunDotnetAsync("tool", [ "run", "docfx",
+            "metadata", docsFile.FullName,
+            outputSwitch, docsOutput
+        ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
 
-    await logger.OutputDotnetFinishedAsync("tool run docfx build", exit, cancellationToken);   
+        await logger.OutputDotnetFinishedAsync("tool run docfx build", exit, cancellationToken); 
+
+        if (exit is not 0) { return exit; }
+    }
+
+    if (!withoutBuild)
+    {
+        await logger.OutputDotnetCliAsync("tool", [ "run", "docfx",
+            "build", docsFile.FullName,
+            outputSwitch, docsOutput
+        ], config: null, noRestore: false, noLogo: false, properties: [], cancellationToken);
+
+        exit = await RunDotnetAsync("tool", [ "run", "docfx",
+            "build", docsFile.FullName,
+            outputSwitch, docsOutput
+        ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+
+        await logger.OutputDotnetFinishedAsync("tool run docfx build", exit, cancellationToken);   
+    }
 
     return exit;
 }
