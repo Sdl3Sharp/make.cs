@@ -1,4 +1,4 @@
-#:property Version=0.0.5
+#:property Version=0.0.6
 #:package NuGet.Packaging@7.3.0
 #:package System.CommandLine@2.0.5
 
