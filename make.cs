@@ -1,6 +1,6 @@
 #:property Version=0.0.6
-#:package NuGet.Packaging@7.3.0
-#:package System.CommandLine@2.0.5
+#:package NuGet.Packaging@7.3.1
+#:package System.CommandLine@2.0.7
 
 using NuGet.Packaging;
 using NuGet.Versioning;
