@@ -1,0 +1,3 @@
+[submodule "ncover.cs"]
+	path = ncover.cs
+	url = https://github.com/Sdl3Sharp/ncover.cs.git
