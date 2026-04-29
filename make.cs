@@ -54,6 +54,7 @@ var withoutMetadataOption            = new Option<bool?>          ("--without-me
 var withoutBuildOption               = new Option<bool?>          ("--without-build")                  { Description = "Do not build the documentation or generate HTML output. Doesn't run \"docfx build\" after \"docfx metadata\"." };
 var buildBeforeDocsOption            = new Option<bool?>          ("--build-before-docs")              { Description = "Build the project before running DocFX (useful for binary-based documentation)." };
 var requireDocFxMinVersionOption     = new Option<string?>        ("--require-docfx-min-version")      { Description = "Minimum required DocFX version (e.g. 2.75.0). Fails if the installed version is older.",                                                     Arity = ArgumentArity.ExactlyOne };
+var nCoverHelpOption                 = new Option<bool?>          ("--ncover-help")                    { Description = "Show help for the ncover.cs tool (as if \"ncover.cs --help\" was run)." };
 
 var configPathArgument = new Argument<FileSystemInfo?>("CONFIG_PATH")
 {
@@ -61,6 +62,9 @@ var configPathArgument = new Argument<FileSystemInfo?>("CONFIG_PATH")
     Description = $"Optional path to a configuration file or a directory containing one. If omitted, the tool looks for '{DefaultConfigFileName}' in the current directory.",
     Arity = ArgumentArity.ZeroOrOne
 };
+
+// Discover "ncover.cs" relative to this source file
+var nCoverFile = new FileInfo(Path.Combine(Path.GetDirectoryName(getSourceFilePath())!, "ncover.cs", "ncover.cs"));
 
 // ===== Root command =====
 var rootCommand = new RootCommand($"Build and package tool for managed projects + native runtimes");
@@ -156,8 +160,6 @@ docsCleanCommand.SetAction(GlobalSetupAsync(DocsSetupAsync(HandleDocsCleanAsync)
 docsCommand.Add(docsCleanCommand);
 
 // ==== ncover command =====
-var nCoverFile = new FileInfo(Path.Combine(Path.GetDirectoryName(getSourceFilePath())!, "ncover.cs", "ncover.cs"));
-
 Option<FileInfo?> nCoverExcludeFileOption;
 Option<string[]?> nCoverExcludeOption;
 Option<string?>   nCoverMinSeverityOption;
@@ -168,7 +170,6 @@ Option<bool?>     nCoverNoUnicodeOption;
 Option<bool?>     nCoverNoAnsiOption;
 Option<string?>   nCoverVerbosityOption;
 Option<bool?>     nCoverPrettyOption;
-Option<bool?>     nCoverHelpOption;
 Command nCoverCommand;
 if (nCoverFile.Exists)
 {
@@ -197,7 +198,6 @@ if (nCoverFile.Exists)
         HelpName    = "VERBOSITY"
     };
     nCoverPrettyOption       = new Option<bool?>    ("--pretty")               { Description = $"Only used when the {nCoverJsonOutputOption.Name} option is specified or when {nCoverVerbosityOption.Name} is set to 'json'. When enabled, the JSON output will be pretty-printed with indentation and newlines." };
-    nCoverHelpOption         = new Option<bool?>    ("--ncover-help")          { Description = "Show help for the ncover.cs tool (as if \"ncover.cs --help\" was run)." };
 
     nCoverCommand = new Command("ncover", "Run ncover.cs on the managed project and compare it against the native runtimes download")
     {
@@ -214,7 +214,7 @@ if (nCoverFile.Exists)
         nCoverPrettyOption,          nCoverHelpOption,
         configPathArgument
     };
-    nCoverCommand.SetAction(GlobalSetupAsync(ProjectSetupAsync(HandleNCoverAsync)));
+    nCoverCommand.SetAction(GlobalSetupAsync(ProjectSetupAsync(HandleNCoverAsync), checkNCoverHelp: true));
     rootCommand.Add(nCoverCommand);
 }
 
@@ -222,9 +222,14 @@ if (nCoverFile.Exists)
 return await rootCommand.Parse(args).InvokeAsync();
 
 // ===== Setup wrappers =====
-Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync continuationAsync) => async (parserResult, cancellationToken) =>
+Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync continuationAsync, bool checkNCoverHelp = false) => async (parserResult, cancellationToken) =>
 {
     const string noLogoPropertyName  = "noLogo", logoFilePropertyName = "logoFile";
+
+    var noRestore = parserResult.GetValue(noRestoreOption) ?? false;
+
+    if (checkNCoverHelp && parserResult.GetValue(nCoverHelpOption) is true)
+    { return await RunDotnetAsync([ "run", nCoverFile.FullName ], [ "--", "--help" ], config: null, noRestore: noRestore, noLogo: false /* dontnet run doesn't actuall accept a "--no-logo" option */ , properties: [], @out: null, @error: null, cancellationToken); }
 
     var logger = new Logger(parserResult.InvocationConfiguration.Output, parserResult.InvocationConfiguration.Error, IsVerbose: parserResult.GetValue(verboseOption) ?? false);
 
@@ -291,7 +296,7 @@ Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync co
             else { await logger.ErrorAsync($"Couldn't find the specified logo file at '{logoFile.FullName}'.", cancellationToken); }
         }
 
-        return await continuationAsync(logger, options, noLogo, cancellationToken);
+        return await continuationAsync(logger, options, noRestore, noLogo, cancellationToken);
     }    
     finally
     {
@@ -302,7 +307,7 @@ Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync co
 
 string GetTempDir(Options options) => options.GetString(tempDirOption, "tempDir", "./temp");
 
-HandlerAsync ProjectSetupAsync(ProjectHandlerAsync continuationAsync) => async (logger, options, noLogo, cancellationToken) =>
+HandlerAsync ProjectSetupAsync(ProjectHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, cancellationToken) =>
 {
     const string projectPropertyName = "project";
 
@@ -327,10 +332,10 @@ HandlerAsync ProjectSetupAsync(ProjectHandlerAsync continuationAsync) => async (
 
     await using var httpClient = new Shared<HttpClient>(() => new());
     await using var tempDirectory = new Shared<TempDirectory>(() => new(tempDirPath));
-    return await continuationAsync(logger, options, projectFile, noLogo, httpClient, tempDirectory, cancellationToken);
+    return await continuationAsync(logger, options, projectFile, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
 };
 
-HandlerAsync DocsSetupAsync(DocsHandlerAsync continuationAsync) => async (logger, options, noLogo, cancellationToken) =>
+HandlerAsync DocsSetupAsync(DocsHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, cancellationToken) =>
 {
     const string docfxPropertyName = "docfx";
 
@@ -351,15 +356,14 @@ HandlerAsync DocsSetupAsync(DocsHandlerAsync continuationAsync) => async (logger
         }
     }
 
-    return await continuationAsync(logger, options, docsFile, noLogo, cancellationToken);
+    return await continuationAsync(logger, options, docsFile, noRestore, noLogo, cancellationToken);
 };
 
 // ===== Handlers =====
-async Task<int> HandleBuildAsync(Logger logger, Options options, FileInfo projectFile, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+async Task<int> HandleBuildAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     var config     = options.ParseResult.GetValue(configOption)    ?? "Debug";
     var defines    = options.ParseResult.GetValue(defineOption)    ?? [];
-    var noRestore  = options.ParseResult.GetValue(noRestoreOption) ?? false;
     var properties = options.ParseResult.GetValue(propertyOption)  ?? [];
 
     await logger.OutputVerboseAsync(() => $"Configuration: {config}, NoRestore: {noRestore}", cancellationToken);
@@ -373,7 +377,7 @@ async Task<int> HandleBuildAsync(Logger logger, Options options, FileInfo projec
 
     var exit = await RunDotnetAsync([ "build", projectFile.FullName ], [        
         defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null
-    ], config, noRestore, noLogo, properties, logger.Out, logger.Error, cancellationToken);
+    ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
 
     await logger.OutputDotnetFinishedAsync([ "build", projectFile.FullName ], exit, cancellationToken);
 
@@ -383,11 +387,10 @@ async Task<int> HandleBuildAsync(Logger logger, Options options, FileInfo projec
 string GetOutputDir(Options options) => options.GetString(outputDirOption, "outputDir", "./output");
 string GetCacheDir (Options options) => options.GetString(cacheDirOption,  "cacheDir",  "./cache");
 
-async Task<int> HandleCleanAsync(Logger logger, Options options, FileInfo projectFile, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+async Task<int> HandleCleanAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     var config     = options.ParseResult.GetValue(configOption);
-    var noRestore  = options.ParseResult.GetValue(noRestoreOption) ?? false;
-    var properties = options.ParseResult.GetValue(propertyOption)  ?? [];
+    var properties = options.ParseResult.GetValue(propertyOption) ?? [];
     var outputDir  = GetOutputDir(options);
     var cacheDir   = GetCacheDir(options);
     var tempDir    = GetTempDir(options);
@@ -398,7 +401,7 @@ async Task<int> HandleCleanAsync(Logger logger, Options options, FileInfo projec
     // Run dotnet clean
     await logger.OutputDotnetCliAsync([ "clean", projectFile.FullName ], [], config, noRestore, noLogo, properties, cancellationToken);
 
-    var exit = await RunDotnetAsync([ "clean", projectFile.FullName ], [], config, noRestore, noLogo, properties, logger.Out, logger.Error, cancellationToken);
+    var exit = await RunDotnetAsync([ "clean", projectFile.FullName ], [], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
 
     await logger.OutputDotnetFinishedAsync([ "clean", projectFile.FullName ], exit, cancellationToken);
 
@@ -417,17 +420,16 @@ const string RuntimesVersionPropertyName = "runtimesVersion",
 string?  GetRuntimesVersion(Options options) => options.GetString(runtimesVersionOption, RuntimesVersionPropertyName);
 string?  GetRuntimesUrl    (Options options) => options.GetString(runtimesUrlOption,     RuntimesUrlPropertyName);
 
-async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo projectFile, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     var runtimesVersion            = GetRuntimesVersion(options);
     var runtimesUrl                = GetRuntimesUrl(options);
-    var targets                    = options.ParseResult.GetValue(targetsOption)               ?? [];
-    var strict                     = options.ParseResult.GetValue(strictOption)                ?? false;
-    var config                     = options.ParseResult.GetValue(configOption)                ?? "Release";
-    var defines                    = options.ParseResult.GetValue(defineOption)                ?? [];
-    var noSymbols                  = options.ParseResult.GetValue(noSymbolsOption)             ?? false;
-    var noRestore                  = options.ParseResult.GetValue(noRestoreOption)             ?? false;
-    var properties                 = options.ParseResult.GetValue(propertyOption)              ?? [];
+    var targets                    = options.ParseResult.GetValue(targetsOption)   ?? [];
+    var strict                     = options.ParseResult.GetValue(strictOption)    ?? false;
+    var config                     = options.ParseResult.GetValue(configOption)    ?? "Release";
+    var defines                    = options.ParseResult.GetValue(defineOption)    ?? [];
+    var noSymbols                  = options.ParseResult.GetValue(noSymbolsOption) ?? false;
+    var properties                 = options.ParseResult.GetValue(propertyOption)  ?? [];
     var outputDir                  = GetOutputDir(options);
     var cacheDir                   = GetCacheDir(options);
 
@@ -477,7 +479,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
             "-o", outputDir,
             defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
             !noSymbols ? "-p:IncludeSymbols=true" : null, !noSymbols ? "-p:SymbolPackageFormat=snupkg" : null,
-        ], config, noRestore, noLogo, properties, logger.Out, logger.Error, cancellationToken);
+        ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
 
         await logger.OutputDotnetFinishedAsync([ "pack", projectFile.FullName ], exit, cancellationToken);
 
@@ -569,7 +571,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
 
             exit = await RunDotnetAsync([ "pack", ridProjPath ], [
                 "-o", outputDir,
-            ], config, noRestore, noLogo, properties, logger.Out, logger.Error, cancellationToken);
+            ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
 
             await logger.OutputDotnetFinishedAsync([ "pack", ridProjPath ], exit, cancellationToken);
 
@@ -627,7 +629,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
 
         var exit = await RunDotnetAsync([ "pack", metaProjPath ], [
             "-o", outputDir,
-        ], config, noRestore, noLogo, properties, logger.Out, logger.Error, cancellationToken);
+        ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
 
         await logger.OutputDotnetFinishedAsync([ "pack", metaProjPath ], exit, cancellationToken);
 
@@ -667,7 +669,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
     return 0;
 }
 
-async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo projectFile, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     const int maxRetriesWithPack = 1;
 
@@ -822,7 +824,7 @@ async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo project
         if (retry++ >= maxRetriesWithPack) { return await logger.FailAsync("Cache is stale and repack attempt limit reached.", cancellationToken); }
 
         await logger.OutputVerboseAsync(() => $"Cache is stale - running '{packCommand.Name}' before push.", cancellationToken);
-        exit = await HandlePackAsync(logger, options, projectFile, noLogo, httpClient, tempDirectory, cancellationToken);
+        exit = await HandlePackAsync(logger, options, projectFile, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
         if (exit is not 0) { return exit; }
 
         goto CheckCache;
@@ -886,7 +888,7 @@ async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo project
                 "--api-key", apiKey,
                 "--source", nugetSource,                
                 "--skip-duplicate"
-            ], config: null, noRestore: false, noLogo: false /* "dotnet nuget" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+            ], config: null, noRestore: false, noLogo: false /* "dotnet nuget" doesn't actually accept a "--no-logo" option */, properties: [], @out: null, @error: null, cancellationToken);
 
             await logger.OutputDotnetFinishedAsync([ "nuget", "push", nupkg ], exit, cancellationToken);
 
@@ -911,7 +913,7 @@ async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo project
                     "--api-key", apiKey,
                     "--source", nugetSource,                
                     "--skip-duplicate"
-                ], config: null, noRestore: false, noLogo: false /* "dotnet nuget" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+                ], config: null, noRestore: false, noLogo: false /* "dotnet nuget" doesn't actually accept a "--no-logo" option */, properties: [], @out: null, @error: null, cancellationToken);
 
                 await logger.OutputDotnetFinishedAsync([ "nuget", "push", snupkg ], exit, cancellationToken);               
 
@@ -933,7 +935,7 @@ const string DocsOutputPropertyName    = "docsOutput",
 string? GetDocsApiOutput(Options options) => options.GetString(docsApiOutputOption, DocsApiOutputPropertyName);
 string? GetDocsOutput   (Options options) => options.GetString(docsOutputOption,    DocsOutputPropertyName);
 
-async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo docsFile, bool noLogo, CancellationToken cancellationToken)
+async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, CancellationToken cancellationToken)
 {
     var docsApiOutput = GetDocsApiOutput(options);
     var docsOutput = GetDocsOutput(options);
@@ -985,7 +987,7 @@ async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo do
     return exit;
 }
 
-async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFile, bool noLogo, CancellationToken cancellationToken)
+async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, CancellationToken cancellationToken)
 {
     var docsApiOutput          = GetDocsApiOutput(options);
     var docsOutput             = GetDocsOutput(options);
@@ -998,7 +1000,7 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
     if (buildBeforeDocs)
     {
         await logger.OutputAsync("Building project before generating docs...", cancellationToken);
-        exit = await ProjectSetupAsync(HandleBuildAsync)(logger, options, noLogo, cancellationToken);
+        exit = await ProjectSetupAsync(HandleBuildAsync)(logger, options, noRestore, noLogo, cancellationToken);
         if (exit is not 0) { return exit; }
     }
 
@@ -1062,7 +1064,7 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
 
         exit = await RunDotnetAsync([ "tool", "run", "docfx", "metadata", docsFile.FullName ], [
             outputSwitch, docsApiOutput
-        ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+        ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--no-logo" option */, properties: [], @out: null, @error: null, cancellationToken);
 
         await logger.OutputDotnetFinishedAsync([ "tool", "run", "docfx", "metadata", docsFile.FullName ], exit, cancellationToken); 
 
@@ -1081,7 +1083,7 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
 
         exit = await RunDotnetAsync([ "tool", "run", "docfx", "build", docsFile.FullName ], [
             outputSwitch, docsOutput
-        ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--nologo" option */, properties: [], logger.Out, logger.Error, cancellationToken);
+        ], config: null /* "docfx" doesn't accept a "-c" option */, noRestore: false, noLogo: false /* "docfx" doesn't actually accept a "--no-logo" option */, properties: [], @out: null, @error: null, cancellationToken);
 
         await logger.OutputDotnetFinishedAsync([ "tool", "run", "docfx", "build", docsFile.FullName ], exit, cancellationToken);   
     }
@@ -1089,13 +1091,12 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
     return exit;
 }
 
-async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo projectFile, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     const string nCoverExcludeFilePropertyName = "nCoverExcludeFile", nCoverExcludePropertyName = "nCoverExclude";
 
     var config             = options.ParseResult.GetValue(configOption)              ?? "Debug";
     var defines            = options.ParseResult.GetValue(defineOption)              ?? [];
-    var noRestore          = options.ParseResult.GetValue(noRestoreOption)           ?? false;
     var properties         = options.ParseResult.GetValue(propertyOption)            ?? [];
     var nCoverExcludeFile  = options.GetFileSystemInfo(nCoverExcludeFileOption, nCoverExcludeFilePropertyName);
     var nCoverExclude      = options.GetStringArray(nCoverExcludeOption, nCoverExcludePropertyName);
@@ -1107,15 +1108,6 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
     var nCoverNoAnsi       = options.ParseResult.GetValue(nCoverNoAnsiOption);
     var nCoverVerbosity    = options.ParseResult.GetValue(nCoverVerbosityOption)     ?? "stats";
     var nCoverPretty       = options.ParseResult.GetValue(nCoverPrettyOption);
-    var nCoverHelp         = options.ParseResult.GetValue(nCoverHelpOption)          ?? false;
-
-    if (nCoverHelp)
-    {
-        return await RunDotnetAsync([ "run", nCoverFile.FullName ], [            
-            "--",
-            "--help"
-        ], config: null, noRestore: noRestore, noLogo: true, properties: [], logger.Out, logger.Error, cancellationToken);
-    }
 
     if (!(await DownloadRuntimesAsync(retrieveLicenseInfo: false, logger, options, httpClient, tempDirectory, cancellationToken)).TryGetValueOrElseError(out var runtimes, out var exit)) { return exit; }
     var (runtimesPath, avaiableRids, _, _) = runtimes;
@@ -1153,7 +1145,7 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
         defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
         "-r", isWinX64 ? "win-x64" : "win-x86",
         "-v", "quiet", // we want to minimize the cluttered output from the build (epspecially the "restore" part); the overall gaol of this subcommand is to run ncover.cs, not to provide a detailed build log
-    ], config, noRestore, noLogo, properties, logger.Out, logger.Error, cancellationToken);
+    ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
 
     await logger.OutputDotnetFinishedAsync([ "build", projectFile.FullName ], exit, cancellationToken);
 
@@ -1203,7 +1195,7 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
         nCoverPretty is not null ? nCoverPrettyOption.Name : null, nCoverPretty switch { true => "true", false => "false", _ => null },
         nCoverExcludeFile is not null ? nCoverExcludeFileOption.Name : null, nCoverExcludeFile?.FullName,
         nCoverExclude is { Length: > 0} ? nCoverExcludeOption.Name : null, ..nCoverExclude ?? []
-    ], config: null, noRestore: noRestore, noLogo: true, properties: [], cancellationToken);
+    ], config: null, noRestore: noRestore, noLogo: false /* dotnet run doesn't actually accept a "--no-logo" option */, properties: [], cancellationToken);
 
     exit = await RunDotnetAsync([ "run", nCoverFile.FullName ], [
         "--",
@@ -1219,7 +1211,7 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
         nCoverPretty is not null ? nCoverPrettyOption.Name : null, nCoverPretty switch { true => "true", false => "false", _ => null },
         nCoverExcludeFile is not null ? nCoverExcludeFileOption.Name : null, nCoverExcludeFile?.FullName,
         nCoverExclude is { Length: > 0} ? nCoverExcludeOption.Name : null, ..nCoverExclude ?? []
-    ], config: null, noRestore: noRestore, noLogo: true, properties: [], logger.Out, logger.Error, cancellationToken);
+    ], config: null, noRestore: noRestore, noLogo: false /* dotnet run doesn't actually accept a "--no-logo" option */, properties: [], @out: null, @error: null, cancellationToken);
 
     await logger.OutputDotnetFinishedAsync([ "run", nCoverFile.FullName ], exit, cancellationToken);
 
@@ -1316,7 +1308,7 @@ async Task<Result<(string RuntimesPath, string[] AvailableRids, string? Runtimes
 
     if (string.IsNullOrWhiteSpace(runtimesVersion)) { return await logger.FailAsync($"No runtimes version specified. Provide {runtimesVersionOption.Name} or set '{RuntimesVersionPropertyName}' in the config.", cancellationToken); }
 
-    await logger.OutputAsync($"Using runtimes version: {runtimesVersion}", cancellationToken);
+    await logger.OutputVerboseAsync(() => $"Using runtimes version: {runtimesVersion}", cancellationToken);
 
     var runtimesCachePath = Path.Combine(cacheDir, "runtimes", runtimesVersion);
     Directory.CreateDirectory(runtimesCachePath);
@@ -1436,9 +1428,9 @@ async Task<Result<(string RuntimesPath, string[] AvailableRids, string? Runtimes
 }
 
 // ===== Handler prototypes =====
-file delegate Task<int> HandlerAsync(Logger logger, Options options, bool noLogo, CancellationToken cancellationToken);
-file delegate Task<int> ProjectHandlerAsync(Logger logger, Options options, FileInfo projectFile, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken);
-file delegate Task<int> DocsHandlerAsync(Logger logger, Options options, FileInfo docsFile, bool noLogo, CancellationToken cancellationToken);
+file delegate Task<int> HandlerAsync(Logger logger, Options options, bool noRestore, bool noLogo, CancellationToken cancellationToken);
+file delegate Task<int> ProjectHandlerAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken);
+file delegate Task<int> DocsHandlerAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, CancellationToken cancellationToken);
 
 // ===== Logging =====
 file readonly record struct Logger(TextWriter Out, TextWriter Error, bool IsVerbose)
