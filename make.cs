@@ -1142,10 +1142,13 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
     ], config, noRestore, noLogo, properties, cancellationToken);
 
     exit = await RunDotnetAsync([ "build", projectFile.FullName ], [
-        defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
-        "-r", isWinX64 ? "win-x64" : "win-x86",
-        "-v", "quiet", // we want to minimize the cluttered output from the build (epspecially the "restore" part); the overall gaol of this subcommand is to run ncover.cs, not to provide a detailed build log
-    ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
+            defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
+            "-r", isWinX64 ? "win-x64" : "win-x86",
+            "-v", "quiet", // we want to minimize the cluttered output from the build (epspecially the "restore" part); the overall gaol of this subcommand is to run ncover.cs, not to provide a detailed build log
+        ], config, noRestore, noLogo, properties,
+        @out: logger.IsVerbose ? null : TextWriter.Null, @error: logger.IsVerbose ? null : TextWriter.Null, // if not verbose, we won't show the build output
+        cancellationToken
+    );
 
     await logger.OutputDotnetFinishedAsync([ "build", projectFile.FullName ], exit, cancellationToken);
 
