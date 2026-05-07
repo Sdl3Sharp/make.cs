@@ -3,6 +3,7 @@
 #:package System.CommandLine@2.0.7
 
 using NuGet.Packaging;
+using NuGet.RuntimeModel;
 using NuGet.Versioning;
 using System.Collections.Immutable;
 using System.CommandLine;
@@ -12,49 +13,64 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 // ===== Configuration =====
 const string DefaultConfigFileName = "make.json",  DefaultProjectPath = "./src",             
              DefaultCacheFileName  = "cache.json", DefaultNugetSource = "https://api.nuget.org/v3/index.json",
-             DefaultDocsPath       = "./docs";
+             DefaultTestsPath      = "./tests",    DefaultDocsPath    = "./docs";
 
 static string getSourceFilePath([CallerFilePath] string path = "") => path;
 
 // ===== CLI options and arguments =====
-var projectOption                    = new Option<FileSystemInfo?>("--project")                        { Description = "Path to a .csproj file or a directory containing one. If a directory is given, the first .csproj inside it will be used.",                   Arity = ArgumentArity.ExactlyOne };
-var configOption                     = new Option<string?>        ("--configuration")                  { Description = "Build configuration to use (e.g. Debug or Release).",                                                                                        Arity = ArgumentArity.ExactlyOne };
-var defineOption                     = new Option<string[]?>      ("--define")                         { Description = "One or more preprocessor symbols to define (semicolon or comma separated).",                                                                 Arity = ArgumentArity.ZeroOrMore };
-var noRestoreOption                  = new Option<bool?>          ("--no-restore")                     { Description = "Skip the restore phase when building or packing." };
-var propertyOption                   = new Option<string[]?>      ("--property")                       { Description = "Additional MSBuild properties in the form name=value.",                                                                                      Arity = ArgumentArity.ZeroOrMore };
-var verboseOption                    = new Option<bool?>          ("--verbose")                        { Description = "Enable verbose logging with detailed output." };
-var noLogoOption                     = new Option<bool?>          ("--no-logo")                        { Description = "Suppress the startup logo." };
-var logoFileOption                   = new Option<FileInfo?>      ("--logo-file")                      { Description = "Path to a text file containting the startup logo ASCII art.",                                                                                Arity = ArgumentArity.ExactlyOne };
-var outputDirOption                  = new Option<string?>        ("--output-dir")                     { Description = "Directory where build or pack outputs will be placed.",                                                                                      Arity = ArgumentArity.ExactlyOne };
-var cacheDirOption                   = new Option<string?>        ("--cache-dir")                      { Description = "Directory to store cached downloads (e.g. runtimes archives).",                                                                              Arity = ArgumentArity.ExactlyOne }; 
-var tempDirOption                    = new Option<string?>        ("--temp-dir")                       { Description = "Temporary working directory used during packing.",                                                                                           Arity = ArgumentArity.ExactlyOne };
-var runtimesVersionOption            = new Option<string?>        ("--runtimes-version")               { Description = "Version of the runtimes package to download and include in RID-specific packages.",                                                          Arity = ArgumentArity.ExactlyOne };
-var runtimesUrlOption                = new Option<string?>        ("--runtimes-url")                   { Description = "URL or format string for the runtimes archive. Use '{0}' as a placeholder for the version.",                                                 Arity = ArgumentArity.ExactlyOne };
-var runtimesLicenseSpdxOption        = new Option<string?>        ("--runtimes-license-spdx")          { Description = "SPDX license expression to apply to RID packages (e.g. MIT, Apache-2.0).",                                                                   Arity = ArgumentArity.ExactlyOne };
-var runtimesLicenseFileUrlOption     = new Option<string?>        ("--runtimes-license-file-url")      { Description = "URL or format string to a license file to include in RID packages. If no SPDX is set, also used as PackageLicenseFile.",                     Arity = ArgumentArity.ExactlyOne };
-var runtimesLicenseSpdxFileUrlOption = new Option<string?>        ("--runtimes-license-spdx-file-url") { Description = "URL or format string to a text file containing an SPDX identifier. Used as PackageLicenseExpression if --runtimes-license-spdx is not set.", Arity = ArgumentArity.ExactlyOne };
-var forceRuntimesDownloadOption      = new Option<bool?>          ("--force-runtimes-download")        { Description = "Force re-download of runtimes archive even if a cached version exists." };
-var targetsOption                    = new Option<string[]?>      ("--targets")                        { Description = "List of targets to pack. Use 'all' for all, 'core' for the main package, 'meta' for the meta package, or specify RIDs.",                     Arity = ArgumentArity.ZeroOrMore };
-var strictOption                     = new Option<bool?>          ("--strict")                         { Description = "Fail if a requested RID has no native binary instead of warning." };
-var noSymbolsOption                  = new Option<bool?>          ("--no-symbols")                     { Description = "Do not create a symbols package for the core project." };
-var nugetSourceOption                = new Option<string?>        ("--nuget-source")                   { Description = $"NuGet feed URL. Defaults to '{DefaultNugetSource}'.",                                                                                       Arity = ArgumentArity.ExactlyOne };
-var apiKeyOption                     = new Option<string>         ("--api-key")                        { Description = "API key for the NuGet feed.",                                                                                                                Arity = ArgumentArity.ExactlyOne,   Required = true };
-var noPackOption                     = new Option<bool?>          ("--no-pack")                        { Description = "Do not 'pack' even if cache is stale." };
-var failStaleOption                  = new Option<bool?>          ("--fail-stale")                     { Description = "Exit with error if cache is stale instead of packing." };
-var docfxOption                      = new Option<FileSystemInfo?>("--docfx")                          { Description = "Path to a docfx.json file or a directory containing one. If a directory is given, the first docfx.json inside it will be used.",             Arity = ArgumentArity.ExactlyOne };
-var docsApiOutputOption              = new Option<string?>        ("--docs-api-output")                { Description = "Override the API documentation output directory. This gets passed as the \"--output\" argument to \"docfx metadata\".",                     Arity = ArgumentArity.ExactlyOne };
-var docsOutputOption                 = new Option<string?>        ("--docs-output")                    { Description = "Override the documentation output directory. This gets passed as the \"--output\" argument to \"docfx build\".",                            Arity = ArgumentArity.ExactlyOne };
-var withoutMetadataOption            = new Option<bool?>          ("--without-metadata")               { Description = "Do not include metadata in the generated documentation (e.g. API reference). Doesn't run \"docfx metadata\" before \"docfx build\"." };
-var withoutBuildOption               = new Option<bool?>          ("--without-build")                  { Description = "Do not build the documentation or generate HTML output. Doesn't run \"docfx build\" after \"docfx metadata\"." };
-var buildBeforeDocsOption            = new Option<bool?>          ("--build-before-docs")              { Description = "Build the project before running DocFX (useful for binary-based documentation)." };
-var requireDocFxMinVersionOption     = new Option<string?>        ("--require-docfx-min-version")      { Description = "Minimum required DocFX version (e.g. 2.75.0). Fails if the installed version is older.",                                                     Arity = ArgumentArity.ExactlyOne };
-var nCoverHelpOption                 = new Option<bool?>          ("--ncover-help")                    { Description = "Show help for the ncover.cs tool (as if \"ncover.cs --help\" was run)." };
+var projectOption                    = new Option<FileSystemInfo?>  ("--project")                        { Description = "Path to a .csproj file or a directory containing one. If a directory is given, the first .csproj inside it will be used.",                                                                            Arity = ArgumentArity.ExactlyOne };
+var configOption                     = new Option<string?>          ("--configuration")                  { Description = "Build configuration to use (e.g. Debug or Release).",                                                                                                                                                 Arity = ArgumentArity.ExactlyOne };
+var defineOption                     = new Option<string[]?>        ("--define")                         { Description = "One or more preprocessor symbols to define (semicolon or comma separated).",                                                                                                                          Arity = ArgumentArity.ZeroOrMore };
+var noRestoreOption                  = new Option<bool?>            ("--no-restore")                     { Description = "Skip the restore phase when building or packing." };
+var propertyOption                   = new Option<string[]?>        ("--property")                       { Description = "Additional MSBuild properties in the form name=value.",                                                                                                                                               Arity = ArgumentArity.ZeroOrMore };
+var verboseOption                    = new Option<bool?>            ("--verbose")                        { Description = "Enable verbose logging with detailed output." };
+var noLogoOption                     = new Option<bool?>            ("--no-logo")                        { Description = "Suppress the startup logo." };
+var logoFileOption                   = new Option<FileInfo?>        ("--logo-file")                      { Description = "Path to a text file containting the startup logo ASCII art.",                                                                                                                                         Arity = ArgumentArity.ExactlyOne };
+var outputDirOption                  = new Option<string?>          ("--output-dir")                     { Description = "Directory where build or pack outputs will be placed.",                                                                                                                                               Arity = ArgumentArity.ExactlyOne };
+var cacheDirOption                   = new Option<string?>          ("--cache-dir")                      { Description = "Directory to store cached downloads (e.g. runtimes archives).",                                                                                                                                       Arity = ArgumentArity.ExactlyOne }; 
+var tempDirOption                    = new Option<string?>          ("--temp-dir")                       { Description = "Temporary working directory used during packing.",                                                                                                                                                    Arity = ArgumentArity.ExactlyOne };
+var runtimesVersionOption            = new Option<string?>          ("--runtimes-version")               { Description = "Version of the runtimes package to download and include in RID-specific packages.",                                                                                                                   Arity = ArgumentArity.ExactlyOne };
+var runtimesUrlOption                = new Option<string?>          ("--runtimes-url")                   { Description = "URL or format string for the runtimes archive. Use '{0}' as a placeholder for the version.",                                                                                                          Arity = ArgumentArity.ExactlyOne };
+var runtimesLicenseSpdxOption        = new Option<string?>          ("--runtimes-license-spdx")          { Description = "SPDX license expression to apply to RID packages (e.g. MIT, Apache-2.0).",                                                                                                                            Arity = ArgumentArity.ExactlyOne };
+var runtimesLicenseFileUrlOption     = new Option<string?>          ("--runtimes-license-file-url")      { Description = "URL or format string to a license file to include in RID packages. If no SPDX is set, also used as PackageLicenseFile.",                                                                              Arity = ArgumentArity.ExactlyOne };
+var runtimesLicenseSpdxFileUrlOption = new Option<string?>          ("--runtimes-license-spdx-file-url") { Description = "URL or format string to a text file containing an SPDX identifier. Used as PackageLicenseExpression if --runtimes-license-spdx is not set.",                                                          Arity = ArgumentArity.ExactlyOne };
+var forceRuntimesDownloadOption      = new Option<bool?>            ("--force-runtimes-download")        { Description = "Force re-download of runtimes archive even if a cached version exists." };
+var targetsOption                    = new Option<string[]?>        ("--targets")                        { Description = "List of targets to pack. Use 'all' for all, 'core' for the main package, 'meta' for the meta package, or specify RIDs.",                                                                              Arity = ArgumentArity.ZeroOrMore };
+var strictOption                     = new Option<bool?>            ("--strict")                         { Description = "Fail if a requested RID has no native binary instead of warning." };
+var noSymbolsOption                  = new Option<bool?>            ("--no-symbols")                     { Description = "Do not create a symbols package for the core project." };
+var nugetSourceOption                = new Option<string?>          ("--nuget-source")                   { Description = $"NuGet feed URL. Defaults to '{DefaultNugetSource}'.",                                                                                                                                                Arity = ArgumentArity.ExactlyOne };
+var apiKeyOption                     = new Option<string>           ("--api-key")                        { Description = "API key for the NuGet feed.",                                                                                                                                                                         Arity = ArgumentArity.ExactlyOne,   Required = true };
+var noPackOption                     = new Option<bool?>            ("--no-pack")                        { Description = "Do not 'pack' even if cache is stale." };
+var failStaleOption                  = new Option<bool?>            ("--fail-stale")                     { Description = "Exit with error if cache is stale instead of packing." };
+var testsOption                      = new Option<FileSystemInfo[]?>("--tests")                          { Description = "Paths to one or more test projects or directories containing test projects. If a directory is given, all .csproj files inside it and its subdirectories will be used.",                               Arity = ArgumentArity.OneOrMore };
+var environmentOption                = new Option<string[]?>        ("--environment", "-e")              { Description = "The \"--environment\" option for \"dotnet test\" to set environment variables for the test execution. Please refer to \"dotnet test --help\" for more details.",                                      Arity = ArgumentArity.OneOrMore,    HelpName = "NAME=\"VALUE\"" };
+var filterOption                     = new Option<string?>          ("--filter")                         { Description = "The \"--filter\" option for \"dotnet test\" to select which tests to run. Please refer to \"dotnet test --help\" for more details.",                                                                  Arity = ArgumentArity.ExactlyOne,   HelpName = "EXPRESSION" };
+var loggerOption                     = new Option<string?>          ("--logger", "-l")                   { Description = "The \"--logger\" option for \"dotnet test\" to specify a logger for the test execution. Please refer to \"dotnet test --help\" for more details.",                                                    Arity = ArgumentArity.ExactlyOne,   HelpName = "LOGGER" };
+var diagOption                       = new Option<string?>          ("--diag")                           { Description = "The \"--diag\" option for \"dotnet test\" to specify a file path to write diagnostic logs to. Please refer to \"dotnet test --help\" for more details.",                                              Arity = ArgumentArity.ExactlyOne,   HelpName = "LOG_FILE" };
+var resultsDirectoryOption           = new Option<string?>          ("--results-directory")              { Description = "The \"--results-directory\" option for \"dotnet test\" to specify a directory to write test results to. Please refer to \"dotnet test --help\" for more details.",                                    Arity = ArgumentArity.ExactlyOne,   HelpName = "RESULTS_DIR" };
+var collectOption                    = new Option<string[]?>        ("--collect")                        { Description = "The \"--collect\" option for \"dotnet test\" to specify data collectors to use during the test execution. Please refer to \"dotnet test --help\" for more details.",                                  Arity = ArgumentArity.OneOrMore,    HelpName = "DATA_COLLECTOR_NAME" };
+var blameOption                      = new Option<bool?>            ("--blame")                          { Description = "The \"--blame\" option for \"dotnet test\" to run tests in blame mode. Please refer to \"dotnet test --help\" for more details." };
+var blameCrashOption                 = new Option<bool?>            ("--blame-crash")                    { Description = "The \"--blame-crash\" option for \"dotnet test\" to run tests in blame mode and collect crash dumps. Please refer to \"dotnet test --help\" for more details." };
+var blameCrashDumpTypeOption         = new Option<string?>          ("--blame-crash-dump-type")          { Description = "The \"--blame-crash-dump-type\" option for \"dotnet test\" to specify the type of crash dumps to collect when running in blame crash mode. Please refer to \"dotnet test --help\" for more details.", Arity = ArgumentArity.ExactlyOne,   HelpName = "DUMP_TYPE" };
+var blameCrashCollectAlwaysOption    = new Option<bool?>            ("--blame-crash-collect-always")     { Description = "The \"--blame-crash-collect-always\" option for \"dotnet test\" to always collect crash dumps in blame crash mode. Please refer to \"dotnet test --help\" for more details." };
+var blameHangOption                  = new Option<bool?>            ("--blame-hang")                     { Description = "The \"--blame-hang\" option for \"dotnet test\" to run tests in blame mode and collect hang dumps. Please refer to \"dotnet test --help\" for more details." };
+var blameHangDumpTypeOption          = new Option<string?>          ("--blame-hang-dump-type")           { Description = "The \"--blame-hang-dump-type\" option for \"dotnet test\" to specify the type of hang dumps to collect when running in blame hang mode. Please refer to \"dotnet test --help\" for more details.",    Arity = ArgumentArity.ExactlyOne,   HelpName = "DUMP_TYPE" };
+var blameHangTimeoutOption           = new Option<string?>          ("--blame-hang-timeout")             { Description = "The \"--blame-hang-timeout\" option for \"dotnet test\" to specify the timeout to use when running in blame hang mode. Please refer to \"dotnet test --help\" for more details.",                     Arity = ArgumentArity.ExactlyOne,   HelpName = "TIMESPAN" };
+var docfxOption                      = new Option<FileSystemInfo?>  ("--docfx")                          { Description = "Path to a docfx.json file or a directory containing one. If a directory is given, the first docfx.json inside it will be used.",                                                                      Arity = ArgumentArity.ExactlyOne };
+var docsApiOutputOption              = new Option<string?>          ("--docs-api-output")                { Description = "Override the API documentation output directory. This gets passed as the \"--output\" argument to \"docfx metadata\".",                                                                               Arity = ArgumentArity.ExactlyOne };
+var docsOutputOption                 = new Option<string?>          ("--docs-output")                    { Description = "Override the documentation output directory. This gets passed as the \"--output\" argument to \"docfx build\".",                                                                                      Arity = ArgumentArity.ExactlyOne };
+var withoutMetadataOption            = new Option<bool?>            ("--without-metadata")               { Description = "Do not include metadata in the generated documentation (e.g. API reference). Doesn't run \"docfx metadata\" before \"docfx build\"." };
+var withoutBuildOption               = new Option<bool?>            ("--without-build")                  { Description = "Do not build the documentation or generate HTML output. Doesn't run \"docfx build\" after \"docfx metadata\"." };
+var buildBeforeDocsOption            = new Option<bool?>            ("--build-before-docs")              { Description = "Build the project before running DocFX (useful for binary-based documentation)." };
+var requireDocFxMinVersionOption     = new Option<string?>          ("--require-docfx-min-version")      { Description = "Minimum required DocFX version (e.g. 2.75.0). Fails if the installed version is older.",                                                                                                              Arity = ArgumentArity.ExactlyOne };
+var nCoverHelpOption                 = new Option<bool?>            ("--ncover-help")                    { Description = "Show help for the ncover.cs tool (as if \"ncover.cs --help\" was run)." };
 
 var configPathArgument = new Argument<FileSystemInfo?>("CONFIG_PATH")
 {
@@ -132,6 +148,47 @@ var pushCommand = new Command("push", "Push NuGet packages to a feed")
 pushCommand.SetAction(GlobalSetupAsync(ProjectSetupAsync(HandlePushAsync)));
 rootCommand.Add(pushCommand);
 
+// ==== tests command =====
+var testsCommand = new Command("tests", "Build and run discovered test projects")
+{
+    testsOption,                   configOption,
+    defineOption,                  noRestoreOption,
+    propertyOption,                environmentOption,
+    filterOption,                  loggerOption,
+    diagOption,                    resultsDirectoryOption,
+    collectOption,                 blameOption,
+    blameCrashOption,              blameCrashDumpTypeOption,
+    blameCrashCollectAlwaysOption, blameHangOption,
+    blameHangDumpTypeOption,       blameHangTimeoutOption,
+    verboseOption,                 noLogoOption,
+    logoFileOption,
+    configPathArgument
+};
+testsCommand.SetAction(GlobalSetupAsync(TestsSetupAsync(HandleTestsAsync)));
+rootCommand.Add(testsCommand);
+
+// ===== tests clean command =====
+var testsCleanCommand = new Command("clean", "Clean discovered test projects")
+{
+    testsOption,     configOption,
+    noRestoreOption, propertyOption,
+    verboseOption,   noLogoOption,
+    logoFileOption,
+    configPathArgument
+};
+testsCleanCommand.SetAction(GlobalSetupAsync(TestsSetupAsync(HandleTestsCleanAsync)));
+testsCommand.Add(testsCleanCommand);
+
+// ===== tests list command =====
+var testsListCommand = new Command("list", "List discovered test projects")
+{
+    testsOption,  verboseOption,
+    noLogoOption, logoFileOption,
+    configPathArgument
+};
+testsListCommand.SetAction(GlobalSetupAsync(TestsSetupAsync(HandleTestsListAsync)));
+testsCommand.Add(testsListCommand);
+
 // ===== docs command =====
 var docsCommand = new Command("docs", "Build project documentation using DocFX")
 {
@@ -160,16 +217,11 @@ docsCleanCommand.SetAction(GlobalSetupAsync(DocsSetupAsync(HandleDocsCleanAsync)
 docsCommand.Add(docsCleanCommand);
 
 // ==== ncover command =====
-Option<FileInfo?> nCoverExcludeFileOption;
-Option<string[]?> nCoverExcludeOption;
-Option<string?>   nCoverMinSeverityOption;
-Option<bool?>     nCoverSlightAsWarnOption;
-Option<bool?>     nCoverWarnAsErrorOption;
-Option<FileInfo?> nCoverJsonOutputOption;
-Option<bool?>     nCoverNoUnicodeOption;
-Option<bool?>     nCoverNoAnsiOption;
-Option<string?>   nCoverVerbosityOption;
-Option<bool?>     nCoverPrettyOption;
+Option<FileInfo?> nCoverExcludeFileOption; Option<string[]?> nCoverExcludeOption;
+Option<string?>   nCoverMinSeverityOption; Option<bool?>     nCoverSlightAsWarnOption;
+Option<bool?>     nCoverWarnAsErrorOption; Option<FileInfo?> nCoverJsonOutputOption;
+Option<bool?>     nCoverNoUnicodeOption;   Option<bool?>     nCoverNoAnsiOption;
+Option<string?>   nCoverVerbosityOption;   Option<bool?>     nCoverPrettyOption;
 Command nCoverCommand;
 if (nCoverFile.Exists)
 {
@@ -222,6 +274,8 @@ if (nCoverFile.Exists)
 return await rootCommand.Parse(args).InvokeAsync();
 
 // ===== Setup wrappers =====
+string GetTempDir(Options options) => options.GetString(tempDirOption, "tempDir", "./temp");
+
 Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync continuationAsync, bool checkNCoverHelp = false) => async (parserResult, cancellationToken) =>
 {
     const string noLogoPropertyName  = "noLogo", logoFilePropertyName = "logoFile";
@@ -294,9 +348,13 @@ Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync co
                 await logger.Out.WriteLineAsync();
             }
             else { await logger.ErrorAsync($"Couldn't find the specified logo file at '{logoFile.FullName}'.", cancellationToken); }
-        }
+        }        
+        
+        var tempDirPath = GetTempDir(options);
 
-        return await continuationAsync(logger, options, noRestore, noLogo, cancellationToken);
+        await using var httpClient = new Shared<HttpClient>(() => new());
+        await using var tempDirectory = new Shared<TempDirectory>(() => new(tempDirPath));
+        return await continuationAsync(logger, options, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
     }    
     finally
     {
@@ -305,9 +363,7 @@ Func<ParseResult, CancellationToken, Task<int>> GlobalSetupAsync(HandlerAsync co
     }
 };
 
-string GetTempDir(Options options) => options.GetString(tempDirOption, "tempDir", "./temp");
-
-HandlerAsync ProjectSetupAsync(ProjectHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, cancellationToken) =>
+HandlerAsync ProjectSetupAsync(ProjectHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, httpClient, tempDirectory, cancellationToken) =>
 {
     const string projectPropertyName = "project";
 
@@ -323,19 +379,57 @@ HandlerAsync ProjectSetupAsync(ProjectHandlerAsync continuationAsync) => async (
         case { Exists: false, FullName: var fullName }: { return await logger.FailAsync($"The specified project path '{fullName}' does not exist.", cancellationToken); }
         default:
         {
-            if (Path.Combine(Environment.CurrentDirectory, DefaultProjectPath) is var projectPath && Directory.Exists(projectPath) && new DirectoryInfo(projectPath).EnumerateFiles("*.csproj").FirstOrDefault() is { } fileInfo) { projectFile = fileInfo; break; }
+            if (new DirectoryInfo(Path.Combine(Environment.CurrentDirectory, DefaultProjectPath)) is { Exists: true } dirInfo && dirInfo.EnumerateFiles("*.csproj").FirstOrDefault() is { } fileInfo) { projectFile = fileInfo; break; }
             return await logger.FailAsync($"No project file could be resolved. Provide {projectOption.Name}, set '{projectPropertyName}' in the config, or place a .csproj in '{DefaultProjectPath}'.", cancellationToken);
         }
     }    
-        
-    var tempDirPath = GetTempDir(options);
 
-    await using var httpClient = new Shared<HttpClient>(() => new());
-    await using var tempDirectory = new Shared<TempDirectory>(() => new(tempDirPath));
     return await continuationAsync(logger, options, projectFile, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
 };
 
-HandlerAsync DocsSetupAsync(DocsHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, cancellationToken) =>
+HandlerAsync TestsSetupAsync(TestsHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, httpClient, tempDirectory, cancellationToken) =>
+{
+    const string testsPropertyName = "tests";    
+
+    static async Task addProjectFileAsync(FileInfo file, List<FileInfo> projectFiles, HashSet<FileSystemInfo> visitedInfos, Logger logger, CancellationToken cancellationToken)
+    {
+        if (visitedInfos.Add(file))
+        {
+            projectFiles.Add(file);
+            await logger.OutputVerboseAsync(() => $"Found test project: '{file.FullName}'", cancellationToken);
+        }
+    }
+
+    static async Task collectProjectFilesAsync(DirectoryInfo dir, List<FileInfo> projectFiles, HashSet<FileSystemInfo> visitedInfos, Logger logger, CancellationToken cancellationToken)    
+    {
+        if (!visitedInfos.Add(dir)) { return; }
+        foreach (var file in dir.EnumerateFiles("*.csproj").Order((IComparer<FileInfo>)FileSystemInfoComparer.Instance)) { await addProjectFileAsync(file, projectFiles, visitedInfos, logger, cancellationToken); }
+        foreach (var subDir in dir.EnumerateDirectories().Order((IComparer<DirectoryInfo>)FileSystemInfoComparer.Instance)) { await collectProjectFilesAsync(subDir, projectFiles, visitedInfos, logger, cancellationToken); }
+    }
+        
+    List<FileInfo> testProjectFiles = [];
+    HashSet<FileSystemInfo> visitedInfos = new(FileSystemInfoComparer.Instance);
+    var tests = options.GetFileSystemInfoArray(testsOption, testsPropertyName);
+    if (tests is not null)
+    {        
+        foreach (var test in tests)
+        {
+            switch (test)
+            {
+                case FileInfo { Exists: true } file: { await addProjectFileAsync(file, testProjectFiles, visitedInfos, logger, cancellationToken); break; }
+                case DirectoryInfo { Exists: true } dir: { await collectProjectFilesAsync(dir, testProjectFiles, visitedInfos, logger, cancellationToken); break; }
+                case { Exists: false, FullName: var fullName }: { return await logger.FailAsync($"The specified test project path '{fullName}' does not exist.", cancellationToken); }
+            }
+        }
+    }
+    else if (new DirectoryInfo(Path.Combine(Environment.CurrentDirectory, DefaultTestsPath)) is { Exists: true } dir) { await collectProjectFilesAsync(dir, testProjectFiles, visitedInfos, logger, cancellationToken); }
+
+    if (testProjectFiles.Count is 0) { return await logger.FailAsync($"No test project files could be resolved. Provide at least one path with {testsOption.Name}, set '{testsPropertyName}' in the config, or place .csproj test projects in '{DefaultTestsPath}'.", cancellationToken); }
+
+    return await continuationAsync(logger, options, testProjectFiles, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
+};
+
+HandlerAsync DocsSetupAsync(DocsHandlerAsync continuationAsync) => async (logger, options, noRestore, noLogo, httpClient, tempDirectory, cancellationToken) =>
 {
     const string docfxPropertyName = "docfx";
 
@@ -356,7 +450,7 @@ HandlerAsync DocsSetupAsync(DocsHandlerAsync continuationAsync) => async (logger
         }
     }
 
-    return await continuationAsync(logger, options, docsFile, noRestore, noLogo, cancellationToken);
+    return await continuationAsync(logger, options, docsFile, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
 };
 
 // ===== Handlers =====
@@ -422,16 +516,16 @@ string?  GetRuntimesUrl    (Options options) => options.GetString(runtimesUrlOpt
 
 async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
-    var runtimesVersion            = GetRuntimesVersion(options);
-    var runtimesUrl                = GetRuntimesUrl(options);
-    var targets                    = options.ParseResult.GetValue(targetsOption)   ?? [];
-    var strict                     = options.ParseResult.GetValue(strictOption)    ?? false;
-    var config                     = options.ParseResult.GetValue(configOption)    ?? "Release";
-    var defines                    = options.ParseResult.GetValue(defineOption)    ?? [];
-    var noSymbols                  = options.ParseResult.GetValue(noSymbolsOption) ?? false;
-    var properties                 = options.ParseResult.GetValue(propertyOption)  ?? [];
-    var outputDir                  = GetOutputDir(options);
-    var cacheDir                   = GetCacheDir(options);
+    var runtimesVersion = GetRuntimesVersion(options);
+    var runtimesUrl     = GetRuntimesUrl(options);
+    var targets         = options.ParseResult.GetValue(targetsOption)   ?? [];
+    var strict          = options.ParseResult.GetValue(strictOption)    ?? false;
+    var config          = options.ParseResult.GetValue(configOption)    ?? "Release";
+    var defines         = options.ParseResult.GetValue(defineOption)    ?? [];
+    var noSymbols       = options.ParseResult.GetValue(noSymbolsOption) ?? false;
+    var properties      = options.ParseResult.GetValue(propertyOption)  ?? [];
+    var outputDir       = GetOutputDir(options);
+    var cacheDir        = GetCacheDir(options);
 
     Directory.CreateDirectory(outputDir);
     Directory.CreateDirectory(cacheDir);
@@ -485,7 +579,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
 
         if (exit is not 0) { return exit; }
 
-        if (outputDirDir.EnumerateFiles("*.nupkg").Except(packed.Select(static p => p.File), (IEqualityComparer<FileInfo>)FileSystemInfoEqualityComparer.Instance).FirstOrDefault() is var file && file is null)
+        if (outputDirDir.EnumerateFiles("*.nupkg").Except(packed.Select(static p => p.File), (IEqualityComparer<FileInfo>)FileSystemInfoComparer.Instance).FirstOrDefault() is var file && file is null)
         { return await logger.FailAsync("Failed to find newly created nupkg file.", cancellationToken); }
         if (await file.GetNuGetPackageIdentityAsync(cancellationToken) is not var (id, version)) { return await logger.FailAsync($"Failed to get the identity of the newly created nupkg file '{file.FullName}'.", cancellationToken); }
 
@@ -577,7 +671,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
 
             if (exit is not 0) { return exit; }
 
-            if (outputDirDir.EnumerateFiles("*.nupkg").Except(packed.Select(static p => p.File), (IEqualityComparer<FileInfo>)FileSystemInfoEqualityComparer.Instance).FirstOrDefault() is var file && file is null)
+            if (outputDirDir.EnumerateFiles("*.nupkg").Except(packed.Select(static p => p.File), (IEqualityComparer<FileInfo>)FileSystemInfoComparer.Instance).FirstOrDefault() is var file && file is null)
             { return await logger.FailAsync("Failed to find newly created nupkg file.", cancellationToken); }
 
             if (await file.GetNuGetPackageIdentityAsync(cancellationToken) is not var (id, version)) { return await logger.FailAsync($"Failed to get the identity of the newly created nupkg file '{file.FullName}'.", cancellationToken); }
@@ -635,7 +729,7 @@ async Task<int> HandlePackAsync(Logger logger, Options options, FileInfo project
 
         if (exit is not 0) return exit;
 
-        if (outputDirDir.EnumerateFiles("*.nupkg").Except(packed.Select(static p => p.File), (IEqualityComparer<FileInfo>)FileSystemInfoEqualityComparer.Instance).FirstOrDefault() is var file && file is null)
+        if (outputDirDir.EnumerateFiles("*.nupkg").Except(packed.Select(static p => p.File), (IEqualityComparer<FileInfo>)FileSystemInfoComparer.Instance).FirstOrDefault() is var file && file is null)
         { return await logger.FailAsync("Failed to find newly created nupkg file.", cancellationToken); }
         if (await file.GetNuGetPackageIdentityAsync(cancellationToken) is not var (id, version)) { return await logger.FailAsync($"Failed to get the identity of the newly created nupkg file '{file.FullName}'.", cancellationToken); }
         packed.Add(("meta", file, id, version));
@@ -681,9 +775,9 @@ async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo project
     var runtimesUrl     = GetRuntimesUrl(options);
     var targets         = options.ParseResult.GetValue(targetsOption)         ?? [];
     var config          = options.ParseResult.GetValue(configOption);
-    var defines         = options.ParseResult.GetValue(defineOption);
+    var defines         = options.ParseResult.GetValue(defineOption)          ?? [];
     var noSymbols       = options.ParseResult.GetValue(noSymbolsOption);
-    var properties      = options.ParseResult.GetValue(propertyOption);
+    var properties      = options.ParseResult.GetValue(propertyOption)        ?? [];
     var outputDir       = GetOutputDir(options);
     var cacheDir        = GetCacheDir(options);
 
@@ -930,12 +1024,177 @@ async Task<int> HandlePushAsync(Logger logger, Options options, FileInfo project
     }
 }
 
+async Task<int> HandleTestsAsync(Logger logger, Options options, IReadOnlyCollection<FileInfo> testProjectFiles, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+{
+    const string runtimeJson = "runtime.json";
+
+    var config                  = options.ParseResult.GetValue(configOption);
+    var defines                 = options.ParseResult.GetValue(defineOption)                   ?? [];
+    var properties              = options.ParseResult.GetValue(propertyOption)                 ?? [];
+    var environments            = options.ParseResult.GetValue(environmentOption)              ?? [];
+    var filter                  = options.ParseResult.GetValue(filterOption);
+    var testsLogger             = options.ParseResult.GetValue(loggerOption);
+    var diag                    = options.ParseResult.GetValue(diagOption);
+    var resultsDir              = options.ParseResult.GetValue(resultsDirectoryOption);
+    var collects                = options.ParseResult.GetValue(collectOption)                  ?? [];
+    var blame                   = options.ParseResult.GetValue(blameOption);
+    var blameCrash              = options.ParseResult.GetValue(blameCrashOption);
+    var blameCrashDumpType      = options.ParseResult.GetValue(blameCrashDumpTypeOption);
+    var blameCrashCollectAlways = options.ParseResult.GetValue(blameCrashCollectAlwaysOption);
+    var blameHang               = options.ParseResult.GetValue(blameHangOption);
+    var blameHangDumpType       = options.ParseResult.GetValue(blameHangDumpTypeOption);
+    var blameHangTimeout        = options.ParseResult.GetValue(blameHangTimeoutOption);
+
+    // Download runtimes
+    if (!(await DownloadRuntimesAsync(retrieveLicenseInfo: false, logger, options, httpClient, tempDirectory, cancellationToken)).TryGetValueOrElseError(out var runtimes, out var exit))
+    { return exit; }
+
+    var (runtimesPath, availableRids, _, _) = runtimes;    
+
+    // Select the most appropriate runtime for the current platform
+    var runtimeGraph = JsonRuntimeFormat.ReadRuntimeGraph(Path.Combine(Path.GetDirectoryName(getSourceFilePath())!, runtimeJson));
+    var currentRid = RuntimeInformation.RuntimeIdentifier;
+    var selectedRid = availableRids.Order(StringComparer.Ordinal).FirstOrDefault(rid
+        => runtimeGraph.AreCompatible(currentRid, rid)
+        && Path.Combine(runtimesPath, rid, "native") is var nativePath
+        && Directory.Exists(nativePath)
+        && Directory.EnumerateFiles(nativePath).Any()
+    );
+
+    if (selectedRid is null) { return await logger.FailAsync($"No compatible runtime found in the downloaded runtimes for the current runtime '{currentRid}'.", cancellationToken); }
+    await logger.OutputVerboseAsync(() => $"Selected runtime '{selectedRid}' for current runtime '{currentRid}'.", cancellationToken);
+
+    // Clean to ensure a clean rebuild
+    exit = await HandleTestsCleanAsync(logger, options, testProjectFiles, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
+    if (exit is not 0) { return exit; }
+
+    // Build each test project and inject the downloaded runtime
+    foreach (var projectFile in testProjectFiles)
+    {
+        // Build the project
+        await logger.OutputDotnetCliAsync([ "build", projectFile.FullName ], [
+            defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
+            "--disable-build-servers", "--no-incremental", // ensure a fully uncached rebuild
+            "/p:UseNativeTestPackage=false"
+        ], config, noRestore, noLogo, properties, cancellationToken);
+
+        exit = await RunDotnetAsync([ "build", projectFile.FullName ], [
+            defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
+            "--disable-build-servers", "--no-incremental", // ensure a fully uncached rebuild
+            "/p:UseNativeTestPackage=false"
+        ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
+
+        await logger.OutputDotnetFinishedAsync([ "build", projectFile.FullName ], exit, cancellationToken);
+        if (exit is not 0) { return exit; }
+
+        // Run dotnet build a second time to get the output assembly path
+        string? buildOutputFile = null;
+        exit = await RunProcessAsync("dotnet", [ "build",
+                projectFile.FullName,
+                defines.Length is > 0 ? $"/p:DefineConstants={string.Join(";", defines)}" : null,
+                config is not null ? "-c" : null, config,
+                "--no-restore",
+                "--no-logo",
+                "/p:UseNativeTestPackage=false",
+                ..properties.Select(static prop => $"/p:{prop}"),
+                "-getProperty:TargetPath" // <- this will get us the path we're looking for, printed to the standard output
+            ],
+            async (procOut, cancellationToken) =>
+            {
+                var line = await procOut.ReadLineAsync(cancellationToken);
+                if (line is null) { await Task.Yield(); return false; }
+                line = line.Trim();
+                if (File.Exists(line)) { buildOutputFile = line; }
+                return true;
+            },
+            errorReaderAsync: null,
+            cancellationToken
+        );
+
+        if (exit is not 0) { return await logger.FailAsync($"Failed to run 'dotnet build -getProperty:TargetPath'.", errorCode: exit, cancellationToken); }
+        else if (string.IsNullOrWhiteSpace(buildOutputFile)) { return await logger.FailAsync($"Build output assembly not found at expected path.", cancellationToken); }
+
+        // Copy the native runtime files to the test project
+        foreach (var runtimeFile in Directory.EnumerateFiles(Path.Combine(runtimesPath, selectedRid, "native")))
+        {
+            var destFile = Path.Combine(Path.GetDirectoryName(buildOutputFile)!, Path.GetFileName(runtimeFile));
+            try
+            {
+                File.Copy(runtimeFile, destFile, overwrite: true);
+                await logger.OutputVerboseAsync(() => $"Copied runtime file '{runtimeFile}' to '{destFile}'.", cancellationToken);
+            }
+            catch (IOException e) { return await logger.FailAsync($"Failed to copy runtime file '{runtimeFile}' to '{destFile}': [{e.GetType().Name}]: {e.Message}", cancellationToken); }
+        }
+    }
+
+    // Run tests for each project
+    foreach (var projectFile in testProjectFiles)
+    {
+        string?[] args = [
+            "--no-build",
+            "/p:UseNativeTestPackage=false",
+            ..environments.SelectMany(static env => (IEnumerable<string>)[ "-e", env ]),
+            filter is not null ? "--filter" : null, filter,
+            testsLogger is not null ? "-l" : null, testsLogger,
+            diag is not null ? "-d" : null, diag,
+            resultsDir is not null ? "--results-directory" : null, resultsDir,
+            ..collects.SelectMany(static c => (IEnumerable<string>)[ "--collect", c ]),
+            blame is true ? "--blame" : null,
+            blameCrash is true ? "--blame-crash" : null,
+            blameCrashDumpType is not null ? "--blame-crash-dump-type" : null, blameCrashDumpType,
+            blameCrashCollectAlways is true ? "--blame-crash-collect-always" : null,
+            blameHang is true ? "--blame-hang" : null,
+            blameHangDumpType is not null ? "--blame-hang-dump-type" : null, blameHangDumpType,
+            blameHangTimeout is not null ? "--blame-hang-timeout" : null, blameHangTimeout,
+        ];
+
+        // Run dotnet test
+        await logger.OutputDotnetCliAsync([ "test", projectFile.FullName ], args, config, noRestore, noLogo, properties, cancellationToken);
+
+        var tmpExit = await RunDotnetAsync([ "test", projectFile.FullName ], args, config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
+        if (exit is 0 && tmpExit is not 0) { exit = tmpExit; }
+
+        await logger.OutputDotnetFinishedAsync([ "test", projectFile.FullName ], tmpExit, cancellationToken);
+    }
+
+    return exit;
+}
+
+async Task<int> HandleTestsCleanAsync(Logger logger, Options options, IReadOnlyCollection<FileInfo> testProjectFiles, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+{
+    var config     = options.ParseResult.GetValue(configOption);
+    var properties = options.ParseResult.GetValue(propertyOption) ?? [];
+
+    int exit = 0;
+    foreach (var projectFile in testProjectFiles)
+    {
+        await logger.OutputDotnetCliAsync([ "clean", projectFile.FullName ], [
+            "--disable-build-servers"
+        ], config, noRestore, noLogo, properties, cancellationToken);
+
+        var tmpExit = await RunDotnetAsync([ "clean", projectFile.FullName ], [
+            "--disable-build-servers"
+        ], config, noRestore, noLogo, properties, @out: null, @error: null, cancellationToken);
+        if (exit is 0 && tmpExit is not 0) { exit = tmpExit; }
+
+        await logger.OutputDotnetFinishedAsync([ "clean", projectFile.FullName ], tmpExit, cancellationToken);
+    }
+
+    return exit;
+}
+
+async Task<int> HandleTestsListAsync(Logger logger, Options options, IReadOnlyCollection<FileInfo> testProjectFiles, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
+{
+    foreach (var projectFile in testProjectFiles) { await logger.OutputAsync(projectFile.FullName, cancellationToken); }
+    return 0;
+}
+
 const string DocsOutputPropertyName    = "docsOutput",
              DocsApiOutputPropertyName = "docsApiOutput";
 string? GetDocsApiOutput(Options options) => options.GetString(docsApiOutputOption, DocsApiOutputPropertyName);
 string? GetDocsOutput   (Options options) => options.GetString(docsOutputOption,    DocsOutputPropertyName);
 
-async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, CancellationToken cancellationToken)
+async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     var docsApiOutput = GetDocsApiOutput(options);
     var docsOutput = GetDocsOutput(options);
@@ -987,7 +1246,7 @@ async Task<int> HandleDocsCleanAsync(Logger logger, Options options, FileInfo do
     return exit;
 }
 
-async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, CancellationToken cancellationToken)
+async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken)
 {
     var docsApiOutput          = GetDocsApiOutput(options);
     var docsOutput             = GetDocsOutput(options);
@@ -1000,7 +1259,7 @@ async Task<int> HandleDocsAsync(Logger logger, Options options, FileInfo docsFil
     if (buildBeforeDocs)
     {
         await logger.OutputAsync("Building project before generating docs...", cancellationToken);
-        exit = await ProjectSetupAsync(HandleBuildAsync)(logger, options, noRestore, noLogo, cancellationToken);
+        exit = await ProjectSetupAsync(HandleBuildAsync)(logger, options, noRestore, noLogo, httpClient, tempDirectory, cancellationToken);
         if (exit is not 0) { return exit; }
     }
 
@@ -1164,7 +1423,7 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
             "--no-restore",
             "--no-logo",
             ..properties.Select(static prop => $"/p:{prop}"),
-            "-getProperty:TargetPath" // <- this will get us the path we're looking for printed to the standard output
+            "-getProperty:TargetPath" // <- this will get us the path we're looking for, printed to the standard output
         ],
         async (procOut, cancellationToken) =>
         {
@@ -1179,7 +1438,7 @@ async Task<int> HandleNCoverAsync(Logger logger, Options options, FileInfo proje
     );
 
     if (exit is not 0) { return await logger.FailAsync($"Failed to run 'dotnet build -getProperty:TargetPath'.", errorCode: exit, cancellationToken); }
-    else if (string.IsNullOrWhiteSpace(managedFile)) { return await logger.FailAsync($"Build output assembly not found at expected path: '{managedFile}'.", cancellationToken); }
+    else if (string.IsNullOrWhiteSpace(managedFile)) { return await logger.FailAsync($"Build output assembly not found at expected path.", cancellationToken); }
 
     managedFile = Path.GetFullPath(managedFile);
 
@@ -1431,9 +1690,10 @@ async Task<Result<(string RuntimesPath, string[] AvailableRids, string? Runtimes
 }
 
 // ===== Handler prototypes =====
-file delegate Task<int> HandlerAsync(Logger logger, Options options, bool noRestore, bool noLogo, CancellationToken cancellationToken);
+file delegate Task<int> HandlerAsync(Logger logger, Options options, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken);
 file delegate Task<int> ProjectHandlerAsync(Logger logger, Options options, FileInfo projectFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken);
-file delegate Task<int> DocsHandlerAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, CancellationToken cancellationToken);
+file delegate Task<int> TestsHandlerAsync(Logger logger, Options options, IReadOnlyCollection<FileInfo> testProjectFiles, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken);
+file delegate Task<int> DocsHandlerAsync(Logger logger, Options options, FileInfo docsFile, bool noRestore, bool noLogo, Shared<HttpClient> httpClient, Shared<TempDirectory> tempDirectory, CancellationToken cancellationToken);
 
 // ===== Logging =====
 file readonly record struct Logger(TextWriter Out, TextWriter Error, bool IsVerbose)
@@ -1602,6 +1862,22 @@ file readonly record struct Options(ParseResult ParseResult, JsonDocument? JsonD
         where T : notnull, FileSystemInfo
         => GetFileSystemInfo(option, propertyName) ?? FromPath<T>(fallback);
 
+    public readonly T[]? GetFileSystemInfoArray<T>(Option<T[]?> option, string propertyName)
+        where T : notnull, FileSystemInfo
+        => ParseResult.GetResult(option)?.GetValueOrDefault<T[]?>()
+        ?? (JsonDocument?.RootElement.TryGetProperty(propertyName, out var property) is true
+            ? property switch
+            {
+                { ValueKind: JsonValueKind.Array } => [..property.EnumerateArray().Select(static element => FromPath<T>(element.GetString())).OfType<T>()],
+                { ValueKind: JsonValueKind.String } when FromPath<T>(property.GetString()) is T info => [info],
+                _ => null
+            }
+            : null);
+
+    public readonly T[] GetFileSystemInfoArray<T>(Option<T[]?> option, string propertyName, params string[] fallback)
+        where T : notnull, FileSystemInfo
+        => GetFileSystemInfoArray(option, propertyName) ?? [..fallback.Select(FromPath<T>).OfType<T>()];
+
     public readonly string? GetString(Option<string?> option, string propertyName)        
         => ParseResult.GetValue(option) ?? (JsonDocument?.RootElement.TryGetProperty(propertyName, out var property) is true ? property.GetString() : null);
 
@@ -1609,9 +1885,14 @@ file readonly record struct Options(ParseResult ParseResult, JsonDocument? JsonD
         => GetString(option, propertyName) ?? fallback;
 
     public readonly string[]? GetStringArray(Option<string[]?> option, string propertyName)
-        => ParseResult.GetValue(option)
-        ?? (JsonDocument?.RootElement.TryGetProperty(propertyName, out var property) is true && property.ValueKind is JsonValueKind.Array
-            ? [..property.EnumerateArray().Select(static str => str.GetString()).Where(static str => str is not null)]
+        => ParseResult.GetResult(option)?.GetValueOrDefault<string[]?>()
+        ?? (JsonDocument?.RootElement.TryGetProperty(propertyName, out var property) is true
+            ? property switch
+            {
+                { ValueKind: JsonValueKind.Array } => [..property.EnumerateArray().Select(element => element.GetString()).OfType<string>()],
+                { ValueKind: JsonValueKind.String } when property.GetString() is string value => [value],
+                _ => null
+            }
             : null);
 
     public string[] GetStringArray(Option<string[]?> option, string propertyName, params string[] fallback)
@@ -1735,20 +2016,24 @@ file sealed class Shared<T> : IAsyncDisposable, IDisposable
     }
 }
 
-file sealed class FileSystemInfoEqualityComparer : IEqualityComparer<FileSystemInfo>
+file sealed class FileSystemInfoComparer : IComparer<FileSystemInfo>, IEqualityComparer<FileSystemInfo>
 {
-    private FileSystemInfoEqualityComparer() { }    
+    private FileSystemInfoComparer() { }    
 
-    public static FileSystemInfoEqualityComparer Instance { get; } = new();
+    public static FileSystemInfoComparer Instance { get; } = new();
 
     [return: NotNullIfNotNull(nameof(info))]
     private static string? NormalizeFullPath(FileSystemInfo? info) => info is not null
         ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(info.FullName))
         : null;
 
+    public int Compare(FileSystemInfo? x, FileSystemInfo? y) => OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase.Compare(NormalizeFullPath(x), NormalizeFullPath(y))
+        : StringComparer.Ordinal.Compare(NormalizeFullPath(x), NormalizeFullPath(y));
+
     public bool Equals(FileSystemInfo? x, FileSystemInfo? y) => OperatingSystem.IsWindows()
-        ? string.Equals(NormalizeFullPath(x), NormalizeFullPath(y), StringComparison.OrdinalIgnoreCase)
-        : string.Equals(NormalizeFullPath(x), NormalizeFullPath(y), StringComparison.Ordinal);
+        ? StringComparer.OrdinalIgnoreCase.Equals(NormalizeFullPath(x), NormalizeFullPath(y))
+        : StringComparer.Ordinal.Equals(NormalizeFullPath(x), NormalizeFullPath(y));
 
     public int GetHashCode([DisallowNull] FileSystemInfo obj) => OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase.GetHashCode(NormalizeFullPath(obj))
