@@ -5,7 +5,7 @@
     "Placement: put this file in the same directory as make.cs so it is picked up automatically,",
     "or pass its path explicitly as the single positional argument: dotnet run make.cs -- ./make.json",
     
-    "All properties are optional — you can omit any of them and instead use CLI options or rely on defaults.",
+    "All properties are optional - you can omit any of them and instead use CLI options or rely on defaults.",
     "The '_notes' property is not read by the tool; it is only used here to provide inline documentation.",
     "API keys are never stored here; always pass them via --api-key on the CLI.",
 
@@ -15,6 +15,7 @@
     "outputDir:                  (--output-dir)                     Directory where build/pack outputs are placed (default: ./output).",
     "cacheDir:                   (--cache-dir)                      Directory for cache files (default: ./cache).",
     "tempDir:                    (--temp-dir)                       Temporary working directory during pack (default: ./temp).",
+    "tests:                      (--tests)                          Paths to one or more test projects or directories containing test projects.",
     "runtimesVersion:            (--runtimes-version)               Version of runtime assets to include in RID-specific packages.",
     "runtimesUrl:                (--runtimes-url)                   URL or format string for runtime archives, often with {0} placeholder.",
     "runtimesLicenseSpdx:        (--runtimes-license-spdx)          SPDX license expression to apply to RID packages.",
